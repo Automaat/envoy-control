@@ -48,7 +48,6 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
     private static final Logger LOGGER = LoggerFactory.getLogger(io.envoyproxy.controlplane.cache.SimpleCache.class);
 
     private final NodeGroup<T> groups;
-    private final Set<String> allowedServices;
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Lock readLock = lock.readLock();
@@ -65,9 +64,8 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
      *
      * @param groups maps an envoy host to a node group
      */
-    public SimpleCache(NodeGroup<T> groups, Set<String> allowedServices) {
+    public SimpleCache(NodeGroup<T> groups) {
         this.groups = groups;
-        this.allowedServices = allowedServices;
     }
 
     /**
@@ -292,12 +290,7 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
             // When Envoy receive CDS response and reconnect to new instance of control-plane which
             // might not have these clusters in snapshot Envoy will stay in warming state and won't leave
             // until gets EDS response with missing resource or get restarted.
-            if (!missingNames.isEmpty()
-                    && watch.request().getTypeUrl().equals(Resources.ENDPOINT_TYPE_URL)
-                    && watch.request().getVersionInfo().equals("")
-                    || !missingNames.isEmpty()
-                    && watch.request().getTypeUrl().equals(Resources.ENDPOINT_TYPE_URL)
-                    && allowedServices.contains(group.getServiceName())) {
+            if (!missingNames.isEmpty()) {
                 LOGGER.info("adding missing resources [{}] to response for {} in ADS mode from node {} at version {}",
                         String.join(", ", missingNames),
                         watch.request().getTypeUrl(),
@@ -311,15 +304,6 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
                             ClusterLoadAssignment.newBuilder().setClusterName(missingName).build()
                     );
                 }
-            } else if (!missingNames.isEmpty()) {
-                LOGGER.info(
-                        "not responding in ADS mode for {} from node {} at version {} for request [{}] since [{}] not in snapshot",
-                        watch.request().getTypeUrl(),
-                        group,
-                        snapshot.version(watch.request().getTypeUrl(), watch.request().getResourceNamesList()),
-                        String.join(", ", watch.request().getResourceNamesList()),
-                        String.join(", ", missingNames));
-                return false;
             }
         }
 

@@ -23,6 +23,7 @@ import pl.allegro.tech.servicemesh.envoycontrol.groups.ServicesGroup
 import pl.allegro.tech.servicemesh.envoycontrol.groups.with
 import pl.allegro.tech.servicemesh.envoycontrol.services.Locality
 import pl.allegro.tech.servicemesh.envoycontrol.services.LocalityAwareServicesState
+import pl.allegro.tech.servicemesh.envoycontrol.services.ServiceInstance
 import pl.allegro.tech.servicemesh.envoycontrol.services.ServiceInstances
 import pl.allegro.tech.servicemesh.envoycontrol.services.ServicesState
 import reactor.core.publisher.Flux
@@ -51,8 +52,8 @@ class SnapshotUpdaterTest {
 
         // groups are generated foreach element in SnapshotCache.groups(), so we need to initialize them
         val groups = listOf(AllServicesGroup(ads = false), groupWithProxy, groupWithServiceName,
-                groupOf(services = serviceDependencies("existingService1")),
-                groupOf(services = serviceDependencies("existingService2")))
+            groupOf(services = serviceDependencies("existingService1")),
+            groupOf(services = serviceDependencies("existingService2")))
         groups.forEach {
             cache.setSnapshot(it, uninitializedSnapshot)
         }
@@ -186,8 +187,13 @@ class SnapshotUpdaterTest {
                 listOf(
                     LocalityAwareServicesState(
                         ServicesState(
-                            serviceNameToInstances = services.map { it to ServiceInstances(it, emptySet()) }.toMap()
-
+                            serviceNameToInstances = services.map {
+                                it to
+                                    ServiceInstances(
+                                        serviceName = it,
+                                        instances = setOf(ServiceInstance("1", emptySet(), "127.0.0.1", 1337))
+                                    )
+                            }.toMap()
                         ),
                         Locality.LOCAL, "zone"
                     )

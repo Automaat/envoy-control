@@ -116,9 +116,7 @@ class ControlPlane private constructor(
                 updateSnapshotExecutor = Executors.newSingleThreadExecutor(ThreadNamingThreadFactory("snapshot-update"))
             }
 
-            val cache = SimpleCache(
-                nodeGroup, properties.envoy.snapshot.outgoingPermissions.servicesAllowedToUseWildcard
-            )
+            val cache = SimpleCache(nodeGroup)
 
             val cleanupProperties = properties.server.snapshotCleanup
 

@@ -41,40 +41,41 @@ internal class EnvoySnapshotFactory(
     private val snapshotsVersions: SnapshotsVersions,
     private val properties: SnapshotProperties,
     private val serviceTagFilter: ServiceTagMetadataGenerator = ServiceTagMetadataGenerator(
-            properties.routing.serviceTags
+        properties.routing.serviceTags
     ),
     private val defaultDependencySettings: DependencySettings =
-DependencySettings(
-    handleInternalRedirect = properties.egress.handleInternalRedirect,
-    timeoutPolicy = Outgoing.TimeoutPolicy(
-        idleTimeout = Durations.fromMillis(properties.egress.commonHttp.idleTimeout.toMillis()),
-        requestTimeout = Durations.fromMillis(properties.egress.commonHttp.requestTimeout.toMillis())
-    )
-),
+        DependencySettings(
+            handleInternalRedirect = properties.egress.handleInternalRedirect,
+            timeoutPolicy = Outgoing.TimeoutPolicy(
+                idleTimeout = Durations.fromMillis(properties.egress.commonHttp.idleTimeout.toMillis()),
+                requestTimeout = Durations.fromMillis(properties.egress.commonHttp.requestTimeout.toMillis())
+            )
+        ),
     private val meterRegistry: MeterRegistry
 ) {
     fun newSnapshot(servicesStates: List<LocalityAwareServicesState>, ads: Boolean): Snapshot {
         val sample = Timer.start(meterRegistry)
 
-        val serviceNames = servicesStates.flatMap { it.servicesState.serviceNames() }.distinct()
+        val notEmptyServices = servicesStates.flatMap {
+            it.servicesState.serviceNameToInstances.values
+        }.groupBy {
+            it.serviceName
+        }.filter { (_, value) -> value.any { it.instances.isNotEmpty() } }
 
         val clusterConfigurations = if (properties.egress.http2.enabled) {
-            servicesStates.flatMap {
-                it.servicesState.serviceNameToInstances.values
-            }.groupBy {
-                it.serviceName
-            }.map { (serviceName, instances) ->
-                toClusterConfiguration(instances, serviceName)
-            }
+            notEmptyServices
+                .map { (serviceName, instances) ->
+                    toClusterConfiguration(instances, serviceName)
+                }
         } else {
-            serviceNames.map { ClusterConfiguration(serviceName = it, http2Enabled = false) }
+            notEmptyServices.keys.map { ClusterConfiguration(serviceName = it, http2Enabled = false) }
         }
 
         val clusters = clustersFactory.getClustersForServices(clusterConfigurations, ads)
 
-        val endpoints: List<ClusterLoadAssignment> = createLoadAssignment(servicesStates)
+        val endpoints: List<ClusterLoadAssignment> = createLoadAssignment(servicesStates, notEmptyServices.keys)
         val routes = listOf(
-            egressRoutesFactory.createEgressRouteConfig("", serviceNames.map {
+            egressRoutesFactory.createEgressRouteConfig("", notEmptyServices.keys.map {
                 RouteSpecification(
                     clusterName = it,
                     routeDomain = it,
@@ -193,15 +194,15 @@ DependencySettings(
         }
 
         return createSnapshot(
-                clusters = clusters,
-                clustersVersion = version.clusters,
-                endpoints = endpoints,
-                endpointsVersions = version.endpoints,
-                listeners = listeners,
-                // for now we assume that listeners don't change during lifecycle
-                routes = routes,
-                // we assume, that routes don't change during Envoy lifecycle unless clusters change
-                routesVersion = RoutesVersion(version.clusters.value)
+            clusters = clusters,
+            clustersVersion = version.clusters,
+            endpoints = endpoints,
+            endpointsVersions = version.endpoints,
+            listeners = listeners,
+            // for now we assume that listeners don't change during lifecycle
+            routes = routes,
+            // we assume, that routes don't change during Envoy lifecycle unless clusters change
+            routesVersion = RoutesVersion(version.clusters.value)
         )
     }
 
@@ -291,16 +292,19 @@ DependencySettings(
     private fun toEnvoyPriority(locality: LocalityEnum): Int = if (locality == LocalityEnum.LOCAL) 0 else 1
 
     private fun createLoadAssignment(
-        localityAwareServicesStates: List<LocalityAwareServicesState>
+        localityAwareServicesStates: List<LocalityAwareServicesState>,
+        notEmptyServices: Set<String>
     ): List<ClusterLoadAssignment> {
         return localityAwareServicesStates
             .flatMap {
                 val locality = it.locality
                 val zone = it.zone
 
-                it.servicesState.serviceNameToInstances.map { (serviceName, serviceInstances) ->
-                    serviceName to createEndpointsGroup(serviceInstances, zone, toEnvoyPriority(locality))
-                }
+                it.servicesState.serviceNameToInstances
+                    .filter { (serviceName, _) -> notEmptyServices.contains(serviceName) }
+                    .map { (serviceName, serviceInstances) ->
+                        serviceName to createEndpointsGroup(serviceInstances, zone, toEnvoyPriority(locality))
+                    }
             }
             .groupBy { (serviceName) ->
                 serviceName
