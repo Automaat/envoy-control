@@ -101,11 +101,10 @@ class SnapshotUpdater(
         return changes
                 .sample(properties.stateSampleDuration)
                 .name("snapshot-updater-services-sampled").metrics()
-                .measureDiscardedItems("snapshot-updater-services-sampled-before", meterRegistry) // TODO: remove
+                .measureDiscardedItems("snapshot-updater-services-sampled-before", meterRegistry)
                 .onBackpressureLatest()
                 .measureDiscardedItems("snapshot-updater-services-sampled", meterRegistry)
                 .publishOn(scheduler)
-                .measureDiscardedItems("snapshot-updater-services-sampled-after", meterRegistry)  // TODO: remove
                 .measureBuffer("snapshot-updater-services-published", meterRegistry)
                 .checkpoint("snapshot-updater-services-published")
                 .name("snapshot-updater-services-published").metrics()
@@ -123,7 +122,6 @@ class SnapshotUpdater(
                     logger.error("Unable to process service changes", e)
                     Mono.justOrEmpty(UpdateResult(action = Action.ERROR_PROCESSING_CHANGES))
                 }
-                .measureDiscardedItems("snapshot-updater-services-sampled-after-2", meterRegistry)  // TODO: remove
     }
 
     fun updateSnapshotForGroup(group: Group, globalSnapshot: Snapshot) {
