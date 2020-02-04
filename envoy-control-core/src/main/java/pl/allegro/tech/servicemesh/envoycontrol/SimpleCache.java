@@ -5,17 +5,14 @@ import com.google.common.collect.Sets;
 import com.google.protobuf.Message;
 import io.envoyproxy.controlplane.cache.CacheStatusInfo;
 import io.envoyproxy.controlplane.cache.NodeGroup;
-import io.envoyproxy.controlplane.cache.Resources;
 import io.envoyproxy.controlplane.cache.Response;
 import io.envoyproxy.controlplane.cache.Snapshot;
 import io.envoyproxy.controlplane.cache.SnapshotCache;
 import io.envoyproxy.controlplane.cache.StatusInfo;
 import io.envoyproxy.controlplane.cache.Watch;
 import io.envoyproxy.controlplane.cache.WatchCancelledException;
-import io.envoyproxy.envoy.api.v2.ClusterLoadAssignment;
 import io.envoyproxy.envoy.api.v2.DiscoveryRequest;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -32,23 +29,15 @@ import javax.annotation.concurrent.GuardedBy;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import pl.allegro.tech.servicemesh.envoycontrol.groups.Group;
 
 /**
- * {@code SimpleCache} provides a default implementation of {@link SnapshotCache}. It maintains a single versioned
- * {@link Snapshot} per node group. For the protocol to work correctly in ADS mode, EDS/RDS requests are responded to
- * only when all resources in the snapshot xDS response are named as part of the request. It is expected that the CDS
- * response names all EDS clusters, and the LDS response names all RDS routes in a snapshot, to ensure that Envoy makes
- * the request for all EDS clusters or RDS routes eventually.
- *
- * <p>The snapshot can be partial, e.g. only include RDS or EDS resources.
+ * This class is copy of {@link io.envoyproxy.controlplane.cache.SimpleCache}
  */
-public class SimpleCache<T extends Group> implements SnapshotCache<T> {
+public class SimpleCache<T> implements SnapshotCache<T> {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(io.envoyproxy.controlplane.cache.SimpleCache.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(SimpleCache.class);
 
     private final NodeGroup<T> groups;
-    private final boolean shouldSendMissingEndpoints;
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Lock readLock = lock.readLock();
@@ -64,11 +53,9 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
      * Constructs a simple cache.
      *
      * @param groups maps an envoy host to a node group
-     * @param shouldSendMissingEndpoints if set create empty endpoint definition for missing resources in snapshot
      */
-    public SimpleCache(NodeGroup<T> groups, boolean shouldSendMissingEndpoints) {
+    public SimpleCache(NodeGroup<T> groups) {
         this.groups = groups;
-        this.shouldSendMissingEndpoints = shouldSendMissingEndpoints;
     }
 
     /**
@@ -228,32 +215,26 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
             return;
         }
 
-        // Responses should be in specific order and TYPE_URLS has a list of resources in the right order.
-        for (String typeUrl : Resources.TYPE_URLS) {
-            status.watchesRemoveIf((id, watch) -> {
-                if (!watch.request().getTypeUrl().equals(typeUrl)) {
-                    return false;
-                }
-                String version = snapshot.version(watch.request().getTypeUrl(), watch.request().getResourceNamesList());
+        status.watchesRemoveIf((id, watch) -> {
+            String version = snapshot.version(watch.request().getTypeUrl(), watch.request().getResourceNamesList());
 
-                if (!watch.request().getVersionInfo().equals(version)) {
-                    if (LOGGER.isDebugEnabled()) {
-                        LOGGER.debug("responding to open watch {}[{}] with new version {}",
-                                id,
-                                String.join(", ", watch.request().getResourceNamesList()),
-                                version);
-                    }
-
-                    respond(watch, snapshot, group);
-
-                    // Discard the watch. A new watch will be created for future snapshots once envoy ACKs the response.
-                    return true;
+            if (!watch.request().getVersionInfo().equals(version)) {
+                if (LOGGER.isDebugEnabled()) {
+                    LOGGER.debug("responding to open watch {}[{}] with new version {}",
+                            id,
+                            String.join(", ", watch.request().getResourceNamesList()),
+                            version);
                 }
 
-                // Do not discard the watch. The request version is the same as the snapshot version, so we wait to respond.
-                return false;
-            });
-        }
+                respond(watch, snapshot, group);
+
+                // Discard the watch. A new watch will be created for future snapshots once envoy ACKs the response.
+                return true;
+            }
+
+            // Do not discard the watch. The request version is the same as the snapshot version, so we wait to respond.
+            return false;
+        });
     }
 
     /**
@@ -283,32 +264,13 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
 
     private boolean respond(Watch watch, Snapshot snapshot, T group) {
         Map<String, ? extends Message> snapshotResources = snapshot.resources(watch.request().getTypeUrl());
-        Map<String, ClusterLoadAssignment> snapshotForMissingResources = Collections.emptyMap();
 
         if (!watch.request().getResourceNamesList().isEmpty() && watch.ads()) {
             Collection<String> missingNames = watch.request().getResourceNamesList().stream()
                     .filter(name -> !snapshotResources.containsKey(name))
                     .collect(Collectors.toList());
 
-            // We are not removing Clusters just making them no instances so it might happen that Envoy asks for instance
-            // which we don't have in cache. In that case we want to send empty endpoint to Envoy.
-            if (shouldSendMissingEndpoints
-                    && watch.request().getTypeUrl().equals(Resources.ENDPOINT_TYPE_URL)
-                    && !missingNames.isEmpty()) {
-                LOGGER.info("adding missing resources [{}] to response for {} in ADS mode from node {} at version {}",
-                        String.join(", ", missingNames),
-                        watch.request().getTypeUrl(),
-                        group,
-                        snapshot.version(watch.request().getTypeUrl(), watch.request().getResourceNamesList())
-                );
-                snapshotForMissingResources = new HashMap<>(missingNames.size());
-                for (String missingName : missingNames) {
-                    snapshotForMissingResources.put(
-                            missingName,
-                            ClusterLoadAssignment.newBuilder().setClusterName(missingName).build()
-                    );
-                }
-            } else if (!missingNames.isEmpty()) {
+            if (!missingNames.isEmpty()) {
                 LOGGER.info(
                         "not responding in ADS mode for {} from node {} at version {} for request [{}] since [{}] not in snapshot",
                         watch.request().getTypeUrl(),
@@ -328,19 +290,11 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
                 group,
                 watch.request().getVersionInfo(),
                 version);
-        Response response;
-        if (!snapshotForMissingResources.isEmpty()) {
-            snapshotForMissingResources.putAll((Map<? extends String, ? extends ClusterLoadAssignment>) snapshotResources);
-            response = createResponse(
-                    watch.request(),
-                    snapshotForMissingResources,
-                    version);
-        } else {
-            response = createResponse(
-                    watch.request(),
-                    snapshotResources,
-                    version);
-        }
+
+        Response response = createResponse(
+                watch.request(),
+                snapshotResources,
+                version);
 
         try {
             watch.respond(response);
