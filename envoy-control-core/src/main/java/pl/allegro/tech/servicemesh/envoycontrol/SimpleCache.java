@@ -48,6 +48,7 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
     private static final Logger LOGGER = LoggerFactory.getLogger(io.envoyproxy.controlplane.cache.SimpleCache.class);
 
     private final NodeGroup<T> groups;
+    private final boolean shouldSendMissingEndpoints;
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Lock readLock = lock.readLock();
@@ -63,9 +64,11 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
      * Constructs a simple cache.
      *
      * @param groups maps an envoy host to a node group
+     * @param shouldSendMissingEndpoints if set create empty endpoint definition for missing resources in snapshot
      */
-    public SimpleCache(NodeGroup<T> groups) {
+    public SimpleCache(NodeGroup<T> groups, boolean shouldSendMissingEndpoints) {
         this.groups = groups;
+        this.shouldSendMissingEndpoints = shouldSendMissingEndpoints;
     }
 
     /**
@@ -289,7 +292,9 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
 
             // We are not removing Clusters just making them no instances so it might happen that Envoy asks for instance
             // which we don't have in cache. In that case we want to send empty endpoint to Envoy.
-            if (!missingNames.isEmpty()) {
+            if (shouldSendMissingEndpoints
+                    && watch.request().getTypeUrl().equals(Resources.ENDPOINT_TYPE_URL)
+                    && !missingNames.isEmpty()) {
                 LOGGER.info("adding missing resources [{}] to response for {} in ADS mode from node {} at version {}",
                         String.join(", ", missingNames),
                         watch.request().getTypeUrl(),
@@ -303,6 +308,16 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
                             ClusterLoadAssignment.newBuilder().setClusterName(missingName).build()
                     );
                 }
+            } else if (!missingNames.isEmpty()) {
+                LOGGER.info(
+                        "not responding in ADS mode for {} from node {} at version {} for request [{}] since [{}] not in snapshot",
+                        watch.request().getTypeUrl(),
+                        group,
+                        snapshot.version(watch.request().getTypeUrl(), watch.request().getResourceNamesList()),
+                        String.join(", ", watch.request().getResourceNamesList()),
+                        String.join(", ", missingNames));
+
+                return false;
             }
         }
 
