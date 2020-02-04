@@ -35,7 +35,7 @@ internal class XdsConnectionsMeterTest : EnvoyControlTestConfiguration() {
             // expect
             mapOf(
                 CDS to 1,
-                EDS to 1, // separate streams for consul and echo
+                EDS to 2, // separate streams for consul and echo
                 LDS to 1,
                 RDS to 2, // default_routes
                 SDS to 0,

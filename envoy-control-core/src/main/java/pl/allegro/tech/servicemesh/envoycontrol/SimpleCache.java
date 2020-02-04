@@ -287,9 +287,8 @@ public class SimpleCache<T extends Group> implements SnapshotCache<T> {
                     .filter(name -> !snapshotResources.containsKey(name))
                     .collect(Collectors.toList());
 
-            // When Envoy receive CDS response and reconnect to new instance of control-plane which
-            // might not have these clusters in snapshot Envoy will stay in warming state and won't leave
-            // until gets EDS response with missing resource or get restarted.
+            // We are not removing Clusters just making them no instances so it might happen that Envoy asks for instance
+            // which we don't have in cache. In that case we want to send empty endpoint to Envoy.
             if (!missingNames.isEmpty()) {
                 LOGGER.info("adding missing resources [{}] to response for {} in ADS mode from node {} at version {}",
                         String.join(", ", missingNames),
