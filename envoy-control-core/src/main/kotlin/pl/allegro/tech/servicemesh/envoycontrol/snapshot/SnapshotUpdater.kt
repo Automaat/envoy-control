@@ -10,7 +10,7 @@ import pl.allegro.tech.servicemesh.envoycontrol.snapshot.listeners.EnvoyListener
 import pl.allegro.tech.servicemesh.envoycontrol.snapshot.listeners.filters.EnvoyHttpFilters
 import pl.allegro.tech.servicemesh.envoycontrol.snapshot.routing.ServiceTagMetadataGenerator
 import pl.allegro.tech.servicemesh.envoycontrol.utils.measureBuffer
-import pl.allegro.tech.servicemesh.envoycontrol.utils.measureDiscardedItems
+import pl.allegro.tech.servicemesh.envoycontrol.utils.onBackpressureLatestMeasured
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import reactor.core.scheduler.Scheduler
@@ -46,8 +46,9 @@ class SnapshotUpdater(
 
     fun start(changes: Flux<List<LocalityAwareServicesState>>): Flux<UpdateResult> {
         return Flux.merge(
-                services(changes),
-                groups()
+                1, // prefetch 1, instead of default 32, to not process stale items in case of backpressure
+                services(changes).subscribeOn(scheduler),
+                groups().subscribeOn(scheduler)
         )
                 .measureBuffer("snapshot-updater-merged", meterRegistry, innerSources = 2)
                 .checkpoint("snapshot-updater-merged")
@@ -101,10 +102,9 @@ class SnapshotUpdater(
         return changes
                 .sample(properties.stateSampleDuration)
                 .name("snapshot-updater-services-sampled").metrics()
-                .measureDiscardedItems("snapshot-updater-services-sampled-before", meterRegistry)
-                .onBackpressureLatest()
-                .measureDiscardedItems("snapshot-updater-services-sampled", meterRegistry)
-                .publishOn(scheduler)
+                .onBackpressureLatestMeasured("snapshot-updater-services-sampled", meterRegistry)
+                // prefetch = 1, instead of default 256, to not process stale states in case of backpressure
+                .publishOn(scheduler, 1)
                 .measureBuffer("snapshot-updater-services-published", meterRegistry)
                 .checkpoint("snapshot-updater-services-published")
                 .name("snapshot-updater-services-published").metrics()
